@@ -49,6 +49,7 @@ def getWorld2View2(R, t, translate=np.array([.0, .0, .0]), scale=1.0):
     return np.float32(Rt)
 
 def getProjectionMatrix(znear, zfar, fovX, fovY):
+    # 将相机坐标投影到NDC坐标
     tanHalfFovY = math.tan((fovY / 2))
     tanHalfFovX = math.tan((fovX / 2))
 

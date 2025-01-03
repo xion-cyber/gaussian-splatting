@@ -34,6 +34,7 @@ class GaussianModel:
             L = build_scaling_rotation(scaling_modifier * scaling, rotation)
             actual_covariance = L @ L.transpose(1, 2)
             symm = strip_symmetric(actual_covariance)
+            # 只存储下对角线的元素
             return symm
         
         self.scaling_activation = torch.exp
@@ -58,8 +59,11 @@ class GaussianModel:
         self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
         self.max_radii2D = torch.empty(0)
+        # 投影到屏幕上的最大高斯半径
         self.xyz_gradient_accum = torch.empty(0)
+        # 点云位置梯度值的累积
         self.denom = torch.empty(0)
+        # 计算高斯分布的平均梯度
         self.optimizer = None
         self.percent_dense = 0
         self.spatial_lr_scale = 0
@@ -158,7 +162,9 @@ class GaussianModel:
 
         dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
         scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
+        # 大小设置为最近3个点的平均距离
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
+        # 设置为0
         rots[:, 0] = 1
 
         opacities = self.inverse_opacity_activation(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
