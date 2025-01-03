@@ -43,15 +43,19 @@ class GaussianModel:
         self.covariance_activation = build_covariance_from_scaling_rotation
 
         self.opacity_activation = torch.sigmoid
+        # 保证不透明度在0-1之间
         self.inverse_opacity_activation = inverse_sigmoid
 
         self.rotation_activation = torch.nn.functional.normalize
 
 
     def __init__(self, sh_degree, optimizer_type="default"):
+        # 球谐函数的阶数
         self.active_sh_degree = 0
         self.optimizer_type = optimizer_type
-        self.max_sh_degree = sh_degree  
+        # 球谐函数的最大阶数
+        self.max_sh_degree = sh_degree
+        # 高斯点云的位置
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
@@ -65,6 +69,7 @@ class GaussianModel:
         self.denom = torch.empty(0)
         # 计算高斯分布的平均梯度
         self.optimizer = None
+        # 百分比密度
         self.percent_dense = 0
         self.spatial_lr_scale = 0
         self.setup_functions()
@@ -147,6 +152,7 @@ class GaussianModel:
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
 
     def oneupSHdegree(self):
+        # 增加球谐函数的阶数
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
 
@@ -156,15 +162,18 @@ class GaussianModel:
         fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
         features = torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
         features[:, :3, 0 ] = fused_color
-        features[:, 3:, 1:] = 0.0
+        # 这行代码无意义，且索引越界
+        # features[:, 3:, 1:] = 0.0
 
         print("Number of points at initialisation : ", fused_point_cloud.shape[0])
-
-        dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
-        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
+        # 将点云膨胀为高斯球
         # 大小设置为最近3个点的平均距离
+        dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
+        # 重复3个维度，作为3个方向的缩放
+        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
+
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
-        # 设置为0
+        # 旋转设置为0，四元数中实部为1,虚部系数为0时，表示旋转为0
         rots[:, 0] = 1
 
         opacities = self.inverse_opacity_activation(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
@@ -185,7 +194,7 @@ class GaussianModel:
         self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-
+        # 这里对SH系数的优化中，低阶分量dc的学习率设置高，而高阶分量的学习率设置低，这是为了避免高频信息过拟合
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
             {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
@@ -321,33 +330,44 @@ class GaussianModel:
 
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
+        # 遍历优化器中的参数组
         for group in self.optimizer.param_groups:
+            # 找到目标参数组
             if group["name"] == name:
+                # 获取旧张量的存储状态
                 stored_state = self.optimizer.state.get(group['params'][0], None)
+                # 初始化动量和二阶动量为与新张量相同大小的零张量
                 stored_state["exp_avg"] = torch.zeros_like(tensor)
                 stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
 
+                # 删除优化器中的旧张量
                 del self.optimizer.state[group['params'][0]]
+                # 用新张量替换旧张量，并将新张量加入优化器的状态中
                 group["params"][0] = nn.Parameter(tensor.requires_grad_(True))
+                # 将存储状态重新加入优化器中，这里的存储状态是为了Adam优化器的动量和二阶动量
                 self.optimizer.state[group['params'][0]] = stored_state
-
+                # 记录替换后的新张量
                 optimizable_tensors[group["name"]] = group["params"][0]
         return optimizable_tensors
 
     def _prune_optimizer(self, mask):
+        # mask是一个布尔张量，用于选择需要保留的参数
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
             stored_state = self.optimizer.state.get(group['params'][0], None)
             if stored_state is not None:
+                # 如果状态存在，更新状态中的动量和二阶动量
                 stored_state["exp_avg"] = stored_state["exp_avg"][mask]
                 stored_state["exp_avg_sq"] = stored_state["exp_avg_sq"][mask]
 
+                # 删除旧状态并替换参数为剪枝后的张量
                 del self.optimizer.state[group['params'][0]]
                 group["params"][0] = nn.Parameter((group["params"][0][mask].requires_grad_(True)))
                 self.optimizer.state[group['params'][0]] = stored_state
 
                 optimizable_tensors[group["name"]] = group["params"][0]
             else:
+                # 如果没有状态，直接替换参数为剪枝后的张量
                 group["params"][0] = nn.Parameter(group["params"][0][mask].requires_grad_(True))
                 optimizable_tensors[group["name"]] = group["params"][0]
         return optimizable_tensors
@@ -460,6 +480,9 @@ class GaussianModel:
         grads[grads.isnan()] = 0.0
 
         self.tmp_radii = radii
+        # clone和split后产生的高斯点其实与原高斯点位置是一样的，但是因为
+        # 新创建的高斯点的梯度是0,在下一步迭代过程中，原高斯点的位置会朝着
+        # 梯度方向移动，从而使得新创建的高斯点与原高斯点分开
         self.densify_and_clone(grads, max_grad, extent)
         self.densify_and_split(grads, max_grad, extent)
 
