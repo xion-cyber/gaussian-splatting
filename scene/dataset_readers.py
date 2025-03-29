@@ -29,13 +29,12 @@ class CameraInfo(NamedTuple):
     T: np.array
     FovY: np.array
     FovX: np.array
-    depth_params: dict
     image_path: str
     image_name: str
-    depth_path: str
     width: int
     height: int
     is_test: bool
+    timestep: int = 0
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
@@ -43,6 +42,7 @@ class SceneInfo(NamedTuple):
     test_cameras: list
     nerf_normalization: dict
     ply_path: str
+    weights_path: str
     is_nerf_synthetic: bool
 
 def getNerfppNorm(cam_info):
@@ -308,6 +308,7 @@ def readNerfSyntheticInfo(path, white_background, depths, eval, extension=".png"
                            ply_path=ply_path,
                            is_nerf_synthetic=True)
     return scene_info
+
 
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
